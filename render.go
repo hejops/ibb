@@ -27,23 +27,20 @@ type Size struct {
 // we assume 1 char is 15 px
 const PixPerChar = 15
 
-// Render image to stdout. Constraining the image to a given size is
-// recommended, as rendering time scales quadratically with image size.
-func Render(fname string, size *Size) {
+func decode(fname string) (img image.Image) {
 	fo, err := os.Open(fname)
 	if err != nil {
 		panic(err)
 	}
 	defer fo.Close()
 
-	var img image.Image
 	var ierr error
 	switch filepath.Ext(fname) {
 	case ".png":
-		img, err = png.Decode(fo)
+		img, ierr = png.Decode(fo)
 
 	case ".jpg":
-		img, err = jpeg.Decode(fo)
+		img, ierr = jpeg.Decode(fo)
 
 	// TODO: handle webm thumbnail?
 
@@ -55,7 +52,13 @@ func Render(fname string, size *Size) {
 	if ierr != nil {
 		panic(err)
 	}
+	return img
+}
 
+// Render image to stdout. Constraining the image to a given size is
+// recommended, as rendering time scales quadratically with image size.
+func Render(fname string, size *Size) {
+	img := decode(fname)
 	// img size in pixels
 	imgX := img.Bounds().Max.X
 	imgY := img.Bounds().Max.Y
@@ -67,7 +70,7 @@ func Render(fname string, size *Size) {
 		interp := resize.Lanczos2 // Bilinear, Bicubic
 
 		// not sure why this works but ok
-		target := uint(float64(size.width*PixPerChar) / 3.5)
+		target := uint(float64(size.width*PixPerChar) / 4)
 
 		switch imgY > imgX {
 		case true: // tall -- resize by width
@@ -86,7 +89,7 @@ func Render(fname string, size *Size) {
 		log.Println("resized dims:", imgX, imgY)
 
 		xPad := (size.width - (imgX / PixPerChar)) / 2
-		yPad := (size.height-(imgY/PixPerChar))/2 - 3
+		yPad := (size.height-(imgY/PixPerChar))/2 - 10
 		// log.Println("yPad", yPad)
 
 		fmt.Println(strings.Repeat("\n", max(0, yPad)))
