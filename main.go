@@ -17,27 +17,34 @@ func main() {
 	lf, _ := tea.LogToFile("/tmp/img.log", "img")
 	defer lf.Close()
 
+	log.Println("started")
+
 	var p *tea.Program
 
-	log.Println(len(os.Args))
 	switch len(os.Args) {
 	case 1:
 		// select board
 
-	// case 2:
-	// 	// select thread
-	// 	board := os.Args[1]
-	// 	c := getCatalog(board)
-	// 	p = tea.NewProgram(
-	// 		&CatalogViewer{catalog: c},
-	// 		tea.WithAltScreen(),
-	// 	)
+	case 2:
+		// TODO: on g, first render of catalog is always erroneous
+		// (overlap), even when returning from a thread (img not
+		// padded). on the other hand, threads always render correctly!
+		// but on hr, catalog is fine, which suggests the error is
+		// specific to that rms image (lol)
+		board := os.Args[1]
+		c := getCatalog(board)
+		t := Thread(c)
+		// log.Println(c.Board, t.Board)
+		p = tea.NewProgram(
+			&ThreadViewer{thread: t, catalog: true},
+			tea.WithAltScreen(),
+		)
 
 	case 3:
 		board, subject := os.Args[1], os.Args[2]
 		t := getCatalog(board).findThread(subject)
 		p = tea.NewProgram(
-			&ThreadViewer{thread: *t},
+			&ThreadViewer{thread: *t, catalog: false},
 			tea.WithAltScreen(),
 		)
 

@@ -6,26 +6,16 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-type Catalog struct {
-	Board string
-	Posts []*Post // OPs
-}
-
-type Thread struct {
-	Board string
-	Posts []*Post
-	// pointer because we need to mutate Post.Board
-}
-
 type Post struct {
 	Board    string
-	Subject  string `json:"sub"` // often empty
+	Subject  string `json:"sub"` // often empty in Thread
 	Comment  string `json:"com"`
 	Filename string
 	Ext      string
@@ -35,16 +25,27 @@ type Post struct {
 }
 
 func (p Post) lineComment() (c string) {
+	if p.Comment == "" {
+		comment, _ := p.imageUrl()
+		return "[" + comment + "]"
+	}
 	c = html.UnescapeString(p.Comment)
 	c = stripHtmlTags(c)
+	c = strings.ReplaceAll(c, "\n", " ")
 	return c
 }
 
-func (p Post) imageUrl() (string, error) {
+func (p Post) imageUrl() (url string, err error) {
 	if p.Time == 0 {
 		return "", errors.New("no image")
 	}
-	return fmt.Sprintf("https://i.4cdn.org/%s/%d%s", p.Board, p.Time, p.Ext), nil
+
+	if p.Board == "" {
+		panic("empty board")
+	}
+
+	url = fmt.Sprintf("https://i.4cdn.org/%s/%d%s", p.Board, p.Time, p.Ext)
+	return url, nil
 }
 
 // Returns empty string if current post has no image
@@ -61,6 +62,7 @@ func (p Post) download() (string, error) {
 		return path, nil
 	}
 
+	log.Println("downloading", url)
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
@@ -75,6 +77,11 @@ func (p Post) download() (string, error) {
 		panic(err)
 	}
 	return path, nil
+}
+
+type Catalog struct {
+	Board string
+	Posts []*Post // OPs
 }
 
 func getCatalog(board string) Catalog {
@@ -103,9 +110,16 @@ func getCatalog(board string) Catalog {
 		threads = append(threads, p.Threads...)
 	}
 
+	// ensure all posts have Board field set (otherwise leads to erroneous
+	// image urls)
+	for _, p := range threads {
+		p.Board = board
+	}
+
 	return Catalog{Board: board, Posts: threads}
 }
 
+// Get thread by subject
 func (c Catalog) findThread(subject string) *Thread {
 	var found *Post
 	for _, t := range c.Posts {
@@ -119,7 +133,30 @@ func (c Catalog) findThread(subject string) *Thread {
 		return nil
 	}
 
-	url := fmt.Sprintf("https://a.4cdn.org/hr/thread/%d.json", found.Num)
+	// return c.getThread(found.Num)
+	return getThread(c.Board, found.Num)
+}
+
+// Note that Thread has the same structure as Catalog, but lacks access to the
+// findThread method
+type Thread struct {
+	Board string
+	Posts []*Post
+	// pointer because we need to mutate Post.Board
+}
+
+func (t *Thread) filterPosts(s string) (matches []int) {
+	for idx, p := range t.Posts {
+		if strings.Contains(strings.ToLower(p.Comment+p.Subject), s) {
+			matches = append(matches, idx)
+		}
+	}
+	return matches
+}
+
+// Get thread by id
+func getThread(board string, id int) *Thread {
+	url := fmt.Sprintf("https://a.4cdn.org/%s/thread/%d.json", board, id)
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
@@ -130,11 +167,13 @@ func (c Catalog) findThread(subject string) *Thread {
 	if err != nil {
 		panic(err)
 	}
-	// var t Thread
-	t := Thread{Board: c.Board}
+	var t Thread
+	// t := Thread{Board: board}
 	if err := json.Unmarshal(b, &t); err != nil {
 		panic(err)
 	}
+	t.Board = board
+	// log.Printf(`getThread("%s", %d)`, board, id)
 
 	for _, p := range t.Posts {
 		p.Board = t.Board
