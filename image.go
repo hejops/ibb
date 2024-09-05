@@ -50,7 +50,8 @@ func decode(fname string) (img image.Image) {
 		return
 	}
 	if ierr != nil {
-		panic(err)
+		// panic(err)
+		return nil
 	}
 	return img
 }
@@ -59,6 +60,9 @@ func decode(fname string) (img image.Image) {
 // recommended, as rendering time scales quadratically with image size.
 func Render(fname string, size *Size) {
 	img := decode(fname)
+	if img == nil {
+		return
+	}
 	// img size in pixels
 	imgX := img.Bounds().Max.X
 	imgY := img.Bounds().Max.Y
@@ -83,7 +87,9 @@ func Render(fname string, size *Size) {
 		imgY = img.Bounds().Max.Y
 
 		if imgX > 1200 || imgY > 1200 {
-			panic(fmt.Sprintln("too big:", imgX, imgY))
+			// panic(fmt.Sprintln("too big:", imgX, imgY))
+			log.Println("too big:", imgX, imgY)
+			return
 		}
 
 		log.Println("resized dims:", imgX, imgY)
