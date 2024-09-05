@@ -11,10 +11,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+const tmpDir = "/tmp/ibb"
+
 func main() {
 	// urls := kastden(user)
 
-	lf, _ := tea.LogToFile("/tmp/img.log", "img")
+	lf, _ := tea.LogToFile("/tmp/ibb.log", "ibb")
 	defer lf.Close()
 
 	log.Println("started")

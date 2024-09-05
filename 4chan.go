@@ -17,10 +17,10 @@ type Post struct {
 	Board    string
 	Subject  string `json:"sub"` // often empty in Thread
 	Comment  string `json:"com"`
-	Filename string
-	Ext      string
-	Time     int `json:"tim"`
-	Num      int `json:"no"`
+	Filename string // original name at upload time
+	Ext      string // starts with "."
+	Time     int    `json:"tim"`
+	Num      int    `json:"no"`
 	// LastModified int `json:"last_modified"` // may be 0
 }
 
@@ -48,16 +48,16 @@ func (p Post) imageUrl() (url string, err error) {
 	return url, nil
 }
 
-// Returns empty string if current post has no image
+// Returns path to temp image file, or empty string if current post has no
+// image
 func (p Post) download() (string, error) {
 	url, err := p.imageUrl()
 	if err != nil {
 		return "", err
 	}
 
-	_ = os.Mkdir("out", os.ModePerm)
-	base := filepath.Base(url)
-	path := filepath.Join("out", base)
+	_ = os.Mkdir(tmpDir, os.ModePerm)
+	path := filepath.Join(tmpDir, filepath.Base(url))
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
@@ -157,6 +157,7 @@ func (t *Thread) filterPosts(s string) (matches []int) {
 // Get thread by id
 func getThread(board string, id int) *Thread {
 	url := fmt.Sprintf("https://a.4cdn.org/%s/thread/%d.json", board, id)
+	// log.Println("getting", url)
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
@@ -168,7 +169,6 @@ func getThread(board string, id int) *Thread {
 		panic(err)
 	}
 	var t Thread
-	// t := Thread{Board: board}
 	if err := json.Unmarshal(b, &t); err != nil {
 		panic(err)
 	}

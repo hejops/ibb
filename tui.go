@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/list"
 	"github.com/charmbracelet/x/term"
-	"github.com/davecgh/go-spew/spew"
 )
 
 type ThreadViewer struct {
@@ -19,6 +20,8 @@ type ThreadViewer struct {
 	moveCount   int  // vim-like navigation (e.g. 5j)
 	showComment bool // if false, show image (if available)
 	catalog     bool // generally only affects View
+
+	// TODO: ambiguous field names: thread / catalog
 
 	searching bool
 	input     string
@@ -29,9 +32,38 @@ type ThreadViewer struct {
 	short  bool
 }
 
+// Write to $HOME/subject/time.ext
+func (m *ThreadViewer) saveImage() error {
+	post := m.currentPost()
+	path, err := post.download()
+	if err != nil {
+		panic(err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		panic(err)
+	}
+	subj := m.thread.Posts[0].Subject
+	dest := filepath.Join(
+		home,
+		strings.ToLower(subj),
+		filepath.Base(path),
+	)
+
+	if _, err := os.Stat(dest); err == nil {
+		return nil
+	}
+
+	log.Println(path, "->", dest)
+
+	return os.Link(path, dest)
+}
+
 // Render current image in background
 func (m *ThreadViewer) display() {
-	post := m.thread.Posts[m.cursor]
+	post := m.currentPost()
+
 	fname, err := post.download()
 	log.Println("displaying:", fname, err)
 
@@ -63,6 +95,12 @@ func (m *ThreadViewer) display() {
 		panic("unhandled condition")
 		// log.Println("unhandled", m.showComment, hasImage, hasComment)
 	}
+}
+
+func (m *ThreadViewer) updateSearch() {
+	m.matches = m.thread.filterPosts(m.input)
+	m.cursor = 0
+	log.Println("input:", m.input, len(m.thread.Posts), "posts", len(m.matches), "matches")
 }
 
 func (m *ThreadViewer) updateMoveCount(s string) {
@@ -100,6 +138,13 @@ func (m *ThreadViewer) move(n int) {
 	m.moveCount = 0
 }
 
+func (m *ThreadViewer) currentPost() *Post {
+	if len(m.matches) > 0 { // get actual index via m.matches
+		return m.thread.Posts[m.matches[m.cursor]]
+	}
+	return m.thread.Posts[m.cursor]
+}
+
 // Init is the first function that will be called. It returns an optional
 // initial command. To not perform an initial command return nil.
 func (m *ThreadViewer) Init() tea.Cmd {
@@ -121,11 +166,6 @@ func (m *ThreadViewer) Init() tea.Cmd {
 	return nil
 }
 
-func (m *ThreadViewer) updateSearch(runes []rune) {
-	m.matches = m.thread.filterPosts(m.input)
-	log.Println("input:", m.input, len(m.thread.Posts), "posts", len(m.matches), "matches")
-}
-
 // Update is called when a message is received. Use it to inspect messages
 // and, in response, update the model and/or send a command.
 func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
@@ -136,7 +176,7 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 		func() tea.Msg { m.display(); return nil },
 	)
 
-	log.Println("msg", msg, spew.Sdump(msg))
+	// log.Println("msg", msg, spew.Sdump(msg))
 
 	switch msg := msg.(type) {
 
@@ -155,7 +195,7 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 
 		s := msg.String()
 
-		// enter must be checked before possible state transitions!
+		// enter must be checked -before- possible state transitions!
 		if m.searching {
 			switch s {
 			case "esc", "enter":
@@ -167,23 +207,17 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 					break
 				}
 				m.input = m.input[:len(m.input)-1]
-				m.updateSearch(msg.Runes)
+				m.updateSearch()
 			default:
 				m.input += string(msg.Runes[0])
-				m.updateSearch(msg.Runes)
+				m.updateSearch()
 			}
 			return m, nil // do NOT redraw on search
 		}
 
 		// state transitions
 		if m.catalog && s == "enter" {
-			pos := m.cursor
-			if len(m.matches) > 0 { // get index via m.matches
-				pos = m.matches[m.cursor]
-			}
-			id := m.thread.Posts[pos].Num
-			// log.Println("getting thread", id, "at pos", pos)
-			nt := getThread(m.thread.Board, id)
+			nt := getThread(m.thread.Board, m.currentPost().Num)
 			m.thread = *nt
 			m.cursor = 0 // TODO: could keep some kind of {thread_id: idx} history in a db
 			m.catalog = false
@@ -205,6 +239,7 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 		switch s {
 
 		case "q", "esc":
+			// TODO: cleanup tmp dir
 			cmd = tea.Quit
 
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
@@ -219,11 +254,26 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 
 		case "ctrl+l": // redraw (like tty)
 
+		// thread-only
 		case "p": // play video urls (and/or webms)
-		case "r": // reload thread/catalog
-		case "s": // save image (copy, rather)
 		case "t": // toggle all posts / text posts only
 		case "y": // copy current image url to clipboard
+
+		case "r": // reload thread/catalog
+			switch m.catalog {
+			case false:
+				oldLen := len(m.thread.Posts)
+				m.thread.Posts = getThread(m.thread.Board, m.thread.Posts[0].Num).Posts
+				log.Println(oldLen, "->", len(m.thread.Posts))
+				m.matches = nil
+				m.input = ""
+			}
+
+		case "s": // save image (copy, rather)
+			err := m.saveImage()
+			if err != nil {
+				panic(err)
+			}
 
 		case " ":
 			// toggle img<>text; in short mode, this field is
