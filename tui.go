@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,7 +36,7 @@ type ThreadViewer struct {
 // Write to $HOME/subject/time.ext
 func (m *ThreadViewer) saveImage() error {
 	post := m.currentPost()
-	path, err := post.download()
+	path, err := post.imagePath()
 	if err != nil {
 		panic(err)
 	}
@@ -44,6 +45,7 @@ func (m *ThreadViewer) saveImage() error {
 	if err != nil {
 		panic(err)
 	}
+
 	subj := m.thread.Posts[0].Subject
 	dest := filepath.Join(
 		home,
@@ -51,21 +53,30 @@ func (m *ThreadViewer) saveImage() error {
 		filepath.Base(path),
 	)
 
-	if _, err := os.Stat(dest); err == nil {
-		return nil
+	if strings.HasPrefix(path, home) {
+		if _, err := os.Stat(dest); err == nil {
+			return nil
+		}
+		log.Println(path, "->", dest)
+		return os.Link(path, dest)
 	}
 
-	log.Println(path, "->", dest)
-
-	return os.Link(path, dest)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	return os.WriteFile(dest, b, 0664)
 }
 
 // Render current image in background
 func (m *ThreadViewer) display() {
 	post := m.currentPost()
 
-	fname, err := post.download()
-	log.Println("displaying:", fname, err)
+	fname, err := post.imagePath()
+	if err == nil {
+		post.download()
+		log.Println("displaying:", fname, err)
+	}
 
 	hasImage := err == nil
 	hasComment := post.Comment != ""
@@ -162,8 +173,18 @@ func (m *ThreadViewer) Init() tea.Cmd {
 		m.cursor = len(m.thread.Posts) - 1
 	}
 
+	_ = os.Mkdir(tmpDir, os.ModePerm)
 	m.display() // doing this will render 1st image 2x on startup
 	return nil
+}
+
+func (t *Thread) getIndex(id int) int {
+	for i, p := range t.Posts {
+		if p.Num == id {
+			return i
+		}
+	}
+	panic("not found")
 }
 
 // Update is called when a message is received. Use it to inspect messages
@@ -217,6 +238,7 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 
 		// state transitions
 		if m.catalog && s == "enter" {
+
 			nt := getThread(m.thread.Board, m.currentPost().Num)
 			m.thread = *nt
 			m.cursor = 0 // TODO: could keep some kind of {thread_id: idx} history in a db
@@ -224,22 +246,26 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 			m.matches = nil
 			m.input = ""
 			return m, cmd
-		}
 
-		if !m.catalog && s == "h" {
+		} else if !m.catalog && s == "h" {
+
+			go m.thread.cleanImages()
+			id := m.thread.Posts[0].Num
 			c := getCatalog(m.thread.Board)
 			m.thread = Thread(c)
-			m.cursor = 0 // TODO: find appropriate idx via thread id
+			m.cursor = m.thread.getIndex(id)
 			m.catalog = true
 			m.matches = nil
 			m.input = ""
 			return m, cmd
+
 		}
 
 		switch s {
 
 		case "q", "esc":
 			// TODO: cleanup tmp dir
+			_ = os.RemoveAll(tmpDir)
 			cmd = tea.Quit
 
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
@@ -257,27 +283,44 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 		// thread-only
 		case "p": // play video urls (and/or webms)
 		case "t": // toggle all posts / text posts only
-		case "y": // copy current image url to clipboard
 
-		case "r": // reload thread/catalog
-			switch m.catalog {
-			case false:
-				oldLen := len(m.thread.Posts)
-				m.thread.Posts = getThread(m.thread.Board, m.thread.Posts[0].Num).Posts
-				log.Println(oldLen, "->", len(m.thread.Posts))
-				m.matches = nil
-				m.input = ""
+		case "y": // copy current image url to clipboard
+			url, err := m.currentPost().imageUrl()
+			if err == nil {
+				// https://github.com/rck/serve/blob/87b073e24bac82bd6f34434f2510b2a807d45982/main.go#L86
+				// echo -n foo | xclip -sel c
+				cmd := exec.Command("xclip", "-sel", "c", "-i")
+				in, _ := cmd.StdinPipe()
+				_ = cmd.Start()
+				_, _ = in.Write([]byte(url))
+				in.Close()
+				_ = cmd.Wait()
 			}
+			cmd = nil
+
+		case "r": // reload
+			switch m.catalog {
+			case true:
+				m.thread.Posts = getCatalog(m.thread.Board).Posts
+			case false:
+				// oldLen := len(m.thread.Posts)
+				m.thread.Posts = getThread(m.thread.Board, m.thread.Posts[0].Num).Posts
+				// log.Println(oldLen, "->", len(m.thread.Posts))
+			}
+			m.matches = nil
+			m.input = ""
 
 		case "s": // save image (copy, rather)
 			err := m.saveImage()
 			if err != nil {
 				panic(err)
 			}
+			m.move(1)
 
 		case " ":
-			// toggle img<>text; in short mode, this field is
-			// currently irrelevant and thus does nothing
+			// toggle img<>text
+			// TODO: in short mode, this field is currently
+			// irrelevant and thus does nothing
 			m.showComment = !m.showComment
 
 		case "j":
@@ -389,9 +432,7 @@ func (m *ThreadViewer) View() string {
 	case false:
 		var body string
 		if m.showComment {
-			// TODO: parse html? in particular, turn <br> into \n
-			body = curr.Comment
-			// io.ReadAll([]byte(curr.Comment))
+			body = curr.htmlComment()
 		}
 
 		panes = lipgloss.JoinVertical(
@@ -450,4 +491,14 @@ func (m *ThreadViewer) header(currId int) (header string) {
 		lipgloss.NewStyle().Render(header),
 	)
 	return header
+}
+
+func (t *Thread) cleanImages() {
+	for _, p := range t.Posts {
+		path, err := p.imagePath()
+		if err != nil {
+			continue
+		}
+		_ = os.Remove(path)
+	}
 }

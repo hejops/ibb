@@ -2,7 +2,39 @@
 
 package main
 
+import (
+	"bytes"
+	"os/exec"
+)
+
 // const ScrollOff = 10
+
+// Render html with w3m; note that w3m appends a newline
+func renderHTML(s string) string {
+	cmd := exec.Command("w3m", "-dump", "-T", "text/html")
+
+	// https://blog.kowalczyk.info/article/wOYk/advanced-command-execution-in-go-with-osexec.html#behind-the-scenes-of-combinedoutput
+	var b bytes.Buffer
+	cmd.Stdout = &b
+
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		panic(err)
+	}
+
+	if _, err := in.Write([]byte(s)); err != nil {
+		panic(err)
+	}
+	if err := in.Close(); err != nil {
+		panic(err)
+	}
+
+	if err := cmd.Run(); err != nil {
+		panic(err)
+	}
+
+	return b.String()
+}
 
 func stripHtmlTags(s string) string {
 	var count int

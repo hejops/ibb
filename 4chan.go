@@ -1,3 +1,5 @@
+//
+
 package main
 
 import (
@@ -16,12 +18,16 @@ import (
 type Post struct {
 	Board    string
 	Subject  string `json:"sub"` // often empty in Thread
-	Comment  string `json:"com"`
+	Comment  string `json:"com"` // raw html
 	Filename string // original name at upload time
 	Ext      string // starts with "."
 	Time     int    `json:"tim"`
 	Num      int    `json:"no"`
 	// LastModified int `json:"last_modified"` // may be 0
+}
+
+func (p Post) htmlComment() string {
+	return renderHTML(p.Comment)
 }
 
 func (p Post) lineComment() (c string) {
@@ -48,18 +54,25 @@ func (p Post) imageUrl() (url string, err error) {
 	return url, nil
 }
 
-// Returns path to temp image file, or empty string if current post has no
-// image
-func (p Post) download() (string, error) {
+// Returns path to temp image file
+func (p Post) imagePath() (fname string, err error) {
 	url, err := p.imageUrl()
 	if err != nil {
 		return "", err
 	}
 
-	_ = os.Mkdir(tmpDir, os.ModePerm)
 	path := filepath.Join(tmpDir, filepath.Base(url))
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
+	return path, nil
+}
+
+func (p Post) download() {
+	url, err := p.imageUrl()
+	if err != nil {
+		return
+	}
+	path, err := p.imagePath()
+	if err != nil {
+		return
 	}
 
 	log.Println("downloading", url)
@@ -73,10 +86,11 @@ func (p Post) download() (string, error) {
 	if err != nil {
 		panic(err)
 	}
+	// _ = os.Mkdir(tmpDir, os.ModePerm)
+
 	if err := os.WriteFile(path, b, 0666); err != nil {
 		panic(err)
 	}
-	return path, nil
 }
 
 type Catalog struct {

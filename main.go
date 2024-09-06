@@ -25,7 +25,9 @@ func main() {
 
 	switch len(os.Args) {
 	case 1:
-		// select board
+		// select board (ls-style grid)
+		gallery()
+		return
 
 	case 2:
 		// TODO: on g, first render of catalog is always erroneous

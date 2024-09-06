@@ -50,4 +50,7 @@ func TestUtil(t *testing.T) {
 		stripHtmlTags(`<a href="#pxxxxxxx" class="quotelink">>>xxxxxxx</a><br>foo`),
 		`>>xxxxxxx foo`,
 	)
+
+	// w3m -dump -T text/html <<< "foo<wbr>bar"
+	assert.Equal(t, renderHTML("foo<wbr>bar"), "foobar\n")
 }
