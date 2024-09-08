@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,17 +28,19 @@ type ThreadViewer struct {
 
 	searching bool
 	input     string
-	matches   []int
+	matches   []int // updated via ThreadViewer.updateSearch
 
 	height int
 	width  int
 	short  bool
+
+	ticker    *time.Ticker // 10 min, only effective in thread
+	refreshed bool
 }
 
 // Write to $HOME/subject/time.ext
-func (m *ThreadViewer) saveImage() error {
-	post := m.currentPost()
-	path, err := post.imagePath()
+func (p Post) saveImage(subj string) error {
+	path, err := p.imagePath()
 	if err != nil {
 		panic(err)
 	}
@@ -46,7 +50,7 @@ func (m *ThreadViewer) saveImage() error {
 		panic(err)
 	}
 
-	subj := m.thread.Posts[0].Subject
+	// subj := m.thread.Posts[0].Subject
 	dest := filepath.Join(
 		home,
 		strings.ToLower(subj),
@@ -68,12 +72,19 @@ func (m *ThreadViewer) saveImage() error {
 	return os.WriteFile(dest, b, 0664)
 }
 
-// Render current image in background
+// Render current image in a goroutine. Note that rendering is done entirely
+// outside the tea.Program (both visually and operationally).
+//
+// Because an area of the window must be allocated for the rendered image (in
+// our case, the bottom half of the available vertical space), the dimensions
+// of the ThreadViewer are therefore expected to be constrained.
 func (m *ThreadViewer) display() {
 	post := m.currentPost()
 
 	fname, err := post.imagePath()
 	if err == nil {
+		// download should not be async here; otherwise img will only
+		// be rendered on 2nd load (async background dl is ok though)
 		post.download()
 		log.Println("displaying:", fname, err)
 	}
@@ -83,7 +94,9 @@ func (m *ThreadViewer) display() {
 
 	sz := &Size{width: m.width, height: m.height}
 
-	// ensure that going from text post -> img post displays the image
+	// ensure that going from text post -> img post automatically displays
+	// the image
+	// TODO: but this also makes " " do nothing on img posts
 	m.showComment = !hasImage
 
 	switch {
@@ -112,26 +125,6 @@ func (m *ThreadViewer) updateSearch() {
 	m.matches = m.thread.filterPosts(m.input)
 	m.cursor = 0
 	log.Println("input:", m.input, len(m.thread.Posts), "posts", len(m.matches), "matches")
-}
-
-func (m *ThreadViewer) updateMoveCount(s string) {
-	currDigits := strconv.Itoa(m.moveCount)
-
-	var mergedDigits string
-	switch m.moveCount {
-	case 0:
-		mergedDigits = s
-	default:
-		mergedDigits = currDigits + s
-	}
-
-	newCount, err := strconv.Atoi(mergedDigits)
-	if err != nil {
-		m.moveCount = 0
-	}
-
-	m.moveCount = newCount
-	log.Println("moveCount:", m.moveCount)
 }
 
 func (m *ThreadViewer) move(n int) {
@@ -167,6 +160,21 @@ func (m *ThreadViewer) Init() tea.Cmd {
 	m.height = h
 	m.short = m.height < 50
 
+	m.ticker = time.NewTicker(time.Minute * 10)
+
+	go func() {
+		for {
+			// https://github.com/dominikh/go-tools/issues/503#issuecomment-497020529
+			t := <-m.ticker.C
+			if m.catalog {
+				continue
+			}
+			m.thread.Posts = getThread(m.thread.Board, m.thread.Posts[0].Num).Posts
+			m.refreshed = true
+			log.Println("tick", t)
+		}
+	}()
+
 	// start thread view at last post. note that this is only triggered on
 	// startup, and not on state transitions
 	if !m.catalog {
@@ -174,17 +182,8 @@ func (m *ThreadViewer) Init() tea.Cmd {
 	}
 
 	_ = os.Mkdir(tmpDir, os.ModePerm)
-	m.display() // doing this will render 1st image 2x on startup
+	// m.display() // doing this will render 1st image 2x on startup
 	return nil
-}
-
-func (t *Thread) getIndex(id int) int {
-	for i, p := range t.Posts {
-		if p.Num == id {
-			return i
-		}
-	}
-	panic("not found")
 }
 
 // Update is called when a message is received. Use it to inspect messages
@@ -214,6 +213,8 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 
 	case tea.KeyMsg:
 
+		m.refreshed = false
+
 		s := msg.String()
 
 		// enter must be checked -before- possible state transitions!
@@ -239,9 +240,8 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 		// state transitions
 		if m.catalog && s == "enter" {
 
-			nt := getThread(m.thread.Board, m.currentPost().Num)
-			m.thread = *nt
-			m.cursor = 0 // TODO: could keep some kind of {thread_id: idx} history in a db
+			m.thread = *getThread(m.thread.Board, m.currentPost().Num)
+			m.cursor = 0 // TODO: could keep some kind of {thread_id: idx} history in a map/db
 			m.catalog = false
 			m.matches = nil
 			m.input = ""
@@ -251,9 +251,14 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 
 			go m.thread.cleanImages()
 			id := m.thread.Posts[0].Num
-			c := getCatalog(m.thread.Board)
+			c := getCatalog(m.thread.Board) // TODO: .asThread?
+			catIdx, err := m.thread.getIndex(id)
+			if err != nil {
+				panic(err)
+			}
+
 			m.thread = Thread(c)
-			m.cursor = m.thread.getIndex(id)
+			m.cursor = catIdx
 			m.catalog = true
 			m.matches = nil
 			m.input = ""
@@ -264,12 +269,12 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 		switch s {
 
 		case "q", "esc":
-			// TODO: cleanup tmp dir
 			_ = os.RemoveAll(tmpDir)
 			cmd = tea.Quit
 
-		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-			m.updateMoveCount(s)
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9", "0":
+			n, _ := strconv.Atoi(s)
+			m.moveCount = 10*m.moveCount + n
 			cmd = nil
 
 		case "/": // start search (not allowed in threads for now)
@@ -280,23 +285,41 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 
 		case "ctrl+l": // redraw (like tty)
 
-		// thread-only
-		case "p": // play video urls (and/or webms)
+		case "p": // play video urls (and webms); thread-only
+			if !m.catalog {
+				go func() {
+					var args []string
+					// args := []string{"--force-window"}
+					for _, p := range m.thread.Posts {
+						for _, line := range p.htmlComment() {
+							if strings.Contains(line, "youtube.com/watch") {
+								args = append(args, line)
+							}
+						}
+					}
+					slices.Reverse(args)
+					args = append([]string{"--force-window"}, args...)
+					_ = exec.Command("mpv", args...).Run()
+				}()
+				cmd = nil
+			}
+
 		case "t": // toggle all posts / text posts only
 
 		case "y": // copy current image url to clipboard
-			url, err := m.currentPost().imageUrl()
-			if err == nil {
-				// https://github.com/rck/serve/blob/87b073e24bac82bd6f34434f2510b2a807d45982/main.go#L86
-				// echo -n foo | xclip -sel c
-				cmd := exec.Command("xclip", "-sel", "c", "-i")
-				in, _ := cmd.StdinPipe()
-				_ = cmd.Start()
-				_, _ = in.Write([]byte(url))
-				in.Close()
-				_ = cmd.Wait()
-			}
 			cmd = nil
+			url, err := m.currentPost().imageUrl()
+			if err != nil {
+				break
+			}
+			// https://github.com/rck/serve/blob/87b073e24bac82bd6f34434f2510b2a807d45982/main.go#L86
+			// echo -n foo | xclip -sel c
+			xclip := exec.Command("xclip", "-sel", "c", "-i")
+			in, _ := xclip.StdinPipe()
+			_ = xclip.Start()
+			_, _ = in.Write([]byte(url))
+			in.Close()
+			_ = xclip.Wait()
 
 		case "r": // reload
 			switch m.catalog {
@@ -311,8 +334,8 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 			m.input = ""
 
 		case "s": // save image (copy, rather)
-			err := m.saveImage()
-			if err != nil {
+			post := m.currentPost()
+			if err := post.saveImage(post.Subject); err != nil {
 				panic(err)
 			}
 			m.move(1)
@@ -328,10 +351,11 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 		case "k":
 			m.move(-1)
 
-		case "pgup":
-			m.move(-m.height / 4)
+		// TODO: if m.short, should be m.height/2
 		case "pgdown":
 			m.move(m.height / 4)
+		case "pgup":
+			m.move(-m.height / 4)
 
 		case "g":
 			switch m.moveCount {
@@ -339,8 +363,8 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 				m.cursor = 0
 			default:
 				m.cursor = m.moveCount - 1
+				m.moveCount = 0
 			}
-			m.moveCount = 0
 
 		case "G":
 			m.cursor = len(m.thread.Posts) - 1
@@ -396,10 +420,17 @@ func (m *ThreadViewer) View() string {
 	// log.Println("model height", m.height, "/ posts", end-start)
 	// log.Println(m.cursor, curr.Subject, curr.Comment)
 
+	if m.short && m.height%2 == 1 {
+		start += 1 // include 1 less item (otherwise last item is oob)
+	}
+
 	for _, p := range posts[start:end] {
 		if p == nil { // window indices may exceed that of Posts
 			panic("oob!")
 		}
+
+		// TODO: relative line numbering
+
 		selected := isSelected[curr.Num == p.Num]
 
 		var item string
@@ -427,12 +458,16 @@ func (m *ThreadViewer) View() string {
 	switch m.short {
 	case true: // replace border with underline, don't show images
 		header = lipgloss.NewStyle().Underline(true).Render(header)
-		panes = lipgloss.NewStyle().Width(m.width).Render(postsList.String())
+		panes = lipgloss.NewStyle().
+			MaxHeight(m.height - 1).
+			Width(m.width).
+			Render(postsList.String())
 
 	case false:
 		var body string
 		if m.showComment {
-			body = curr.htmlComment()
+			// body = curr.htmlComment()
+			body = curr.QuoteComment(&m.thread)
 		}
 
 		panes = lipgloss.JoinVertical(
@@ -467,6 +502,12 @@ func (m *ThreadViewer) header(currId int) (header string) {
 
 	case false:
 		title = m.thread.Posts[0].Subject
+		newPosts := len(m.thread.Posts) - 1 - m.cursor
+		if m.refreshed && newPosts > 0 {
+			// title += " [!]"
+			// note: this is only valid if positioned at the last post
+			title += fmt.Sprintf(" [%d new posts]", newPosts)
+		}
 		header = fmt.Sprintf(
 			"https://boards.4chan.org/%s/thread/%d %s ",
 			m.thread.Board,
@@ -491,14 +532,4 @@ func (m *ThreadViewer) header(currId int) (header string) {
 		lipgloss.NewStyle().Render(header),
 	)
 	return header
-}
-
-func (t *Thread) cleanImages() {
-	for _, p := range t.Posts {
-		path, err := p.imagePath()
-		if err != nil {
-			continue
-		}
-		_ = os.Remove(path)
-	}
 }

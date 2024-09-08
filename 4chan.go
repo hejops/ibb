@@ -12,11 +12,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 type Post struct {
-	Board    string
+	Board    string // must be inherited from parent Thread/Catalog
 	Subject  string `json:"sub"` // often empty in Thread
 	Comment  string `json:"com"` // raw html
 	Filename string // original name at upload time
@@ -26,7 +27,30 @@ type Post struct {
 	// LastModified int `json:"last_modified"` // may be 0
 }
 
-func (p Post) htmlComment() string {
+// Render comment as HTML, then add quoted post(s) with indentation.
+func (p Post) QuoteComment(t *Thread) string {
+	// comm := renderHTML(p.Comment)
+	var lines []string
+	for _, line := range renderHTML(p.Comment) {
+		lines = append(lines, line)
+		if strings.HasPrefix(line, ">>") {
+			quote := strings.Fields(line)[0]
+			quote = strings.TrimPrefix(quote, ">>")
+			id, err := strconv.Atoi(quote)
+			if err != nil {
+				panic(err)
+			}
+			parent, err := t.getIndex(id)
+			if err != nil {
+				continue
+			}
+			lines = append(lines, indent(t.Posts[parent].htmlComment())...)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (p Post) htmlComment() []string {
 	return renderHTML(p.Comment)
 }
 
@@ -159,6 +183,15 @@ type Thread struct {
 	// pointer because we need to mutate Post.Board
 }
 
+func (t *Thread) getIndex(id int) (int, error) {
+	for i, p := range t.Posts {
+		if p.Num == id {
+			return i, nil
+		}
+	}
+	return 0, errors.New("post not found")
+}
+
 func (t *Thread) filterPosts(s string) (matches []int) {
 	for idx, p := range t.Posts {
 		if strings.Contains(strings.ToLower(p.Comment+p.Subject), s) {
@@ -166,6 +199,16 @@ func (t *Thread) filterPosts(s string) (matches []int) {
 		}
 	}
 	return matches
+}
+
+func (t *Thread) cleanImages() {
+	for _, p := range t.Posts {
+		path, err := p.imagePath()
+		if err != nil {
+			continue
+		}
+		_ = os.Remove(path)
+	}
 }
 
 // Get thread by id

@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mattn/go-sixel"
+	"github.com/dolmen-go/kittyimg" // faster than mattn/go-sixel
 	"github.com/nfnt/resize"
 )
 
@@ -27,14 +27,15 @@ type Size struct {
 // we assume 1 char is 15 px
 const PixPerChar = 15
 
-func decode(fname string) (img image.Image) {
+func decode(fname string) (img image.Image, ierr error) {
 	fo, err := os.Open(fname)
 	if err != nil {
-		panic(err)
+		// panic(err)
+		return nil, err
 	}
 	defer fo.Close()
 
-	var ierr error
+	// var ierr error
 	switch filepath.Ext(fname) {
 	case ".png":
 		img, ierr = png.Decode(fo)
@@ -49,17 +50,21 @@ func decode(fname string) (img image.Image) {
 		log.Println("failed to decode", fname)
 		return
 	}
-	if ierr != nil {
-		// panic(err)
-		return nil
-	}
-	return img
+	// if ierr != nil {
+	// 	// panic(err)
+	// 	return nil
+	// }
+	return img, ierr
 }
 
-// Render image to stdout. Constraining the image to a given size is
+// Render a single image to stdout. Constraining the image to a given size is
 // recommended, as rendering time scales quadratically with image size.
 func Render(fname string, size *Size) {
-	img := decode(fname)
+	img, err := decode(fname)
+	if err != nil {
+		return
+	}
+
 	if img == nil {
 		return
 	}
@@ -103,7 +108,19 @@ func Render(fname string, size *Size) {
 
 	}
 
-	if err := sixel.NewEncoder(os.Stdout).Encode(img); err != nil {
+	// if err := sixel.NewEncoder(os.Stdout).Encode(img); err != nil {
+	// 	panic(err)
+	// }
+
+	if err := kittyimg.Fprintln(os.Stdout, img); err != nil {
 		panic(err)
 	}
+
+	// the result is a b64-encoded string; s and v refer to width and
+	// height, for example. the protocol spec is 'loosely' documented
+	// within kitty, but more concrete examples can be gleaned from related
+	// repos.
+	//
+	// https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
+	// https://github.com/benjajaja/ratatui-image/blob/afbdd4e79251ef0709e4a2d9281b3ac6eb73291a/src/protocol/kitty.rs#L150
 }

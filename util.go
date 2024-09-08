@@ -5,12 +5,19 @@ package main
 import (
 	"bytes"
 	"os/exec"
+	"strings"
 )
 
-// const ScrollOff = 10
+func indent(strs []string) []string {
+	indented := make([]string, len(strs))
+	for i, line := range strs {
+		indented[i] = "\t" + line
+	}
+	return indented
+}
 
 // Render html with w3m; note that w3m appends a newline
-func renderHTML(s string) string {
+func renderHTML(s string) []string {
 	cmd := exec.Command("w3m", "-dump", "-T", "text/html")
 
 	// https://blog.kowalczyk.info/article/wOYk/advanced-command-execution-in-go-with-osexec.html#behind-the-scenes-of-combinedoutput
@@ -33,7 +40,8 @@ func renderHTML(s string) string {
 		panic(err)
 	}
 
-	return b.String()
+	// return b.String()
+	return strings.Split(b.String(), "\n")
 }
 
 func stripHtmlTags(s string) string {
