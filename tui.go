@@ -171,7 +171,7 @@ func (m *ThreadViewer) Init() tea.Cmd {
 			}
 			m.thread.Posts = getThread(m.thread.Board, m.thread.Posts[0].Num).Posts
 			m.refreshed = true
-			log.Println("tick", t)
+			log.Println("updated", t)
 		}
 	}()
 
@@ -186,15 +186,28 @@ func (m *ThreadViewer) Init() tea.Cmd {
 	return nil
 }
 
-// Update is called when a message is received. Use it to inspect messages
-// and, in response, update the model and/or send a command.
-func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
+func (m *ThreadViewer) updateScreen() tea.Cmd {
+	if m.short {
+		return nil
+	}
+
 	// TODO: race condition -- ClearScreen is not async, so multiple images
 	// may be rendered
-	cmd = tea.Sequence(
+	return tea.Sequence(
 		tea.ClearScreen,
 		func() tea.Msg { m.display(); return nil },
 	)
+}
+
+// Update is called when a message is received. Use it to inspect messages
+// and, in response, update the model and/or send a command.
+func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
+	cmd = m.updateScreen()
+
+	pgDist := m.height / 2
+	if !m.short {
+		pgDist *= 2
+	}
 
 	// log.Println("msg", msg, spew.Sdump(msg))
 
@@ -208,7 +221,7 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 		m.height = msg.Height
 		m.short = m.height < 50
 		m.showComment = m.short
-		return m, cmd
+		return m, m.updateScreen()
 		// log.Println("showText:", m.showText)
 
 	case tea.KeyMsg:
@@ -252,12 +265,12 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 			go m.thread.cleanImages()
 			id := m.thread.Posts[0].Num
 			c := getCatalog(m.thread.Board) // TODO: .asThread?
+
+			m.thread = Thread(c)
 			catIdx, err := m.thread.getIndex(id)
 			if err != nil {
 				panic(err)
 			}
-
-			m.thread = Thread(c)
 			m.cursor = catIdx
 			m.catalog = true
 			m.matches = nil
@@ -273,19 +286,18 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 			cmd = tea.Quit
 
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9", "0":
+			cmd = nil
 			n, _ := strconv.Atoi(s)
 			m.moveCount = 10*m.moveCount + n
-			cmd = nil
 
-		case "/": // start search (not allowed in threads for now)
+		case "/": // start search; catalog-only
+			cmd = nil
 			if m.catalog {
 				m.searching = true
 			}
-			cmd = nil
-
-		case "ctrl+l": // redraw (like tty)
 
 		case "p": // play video urls (and webms); thread-only
+			cmd = nil
 			if !m.catalog {
 				go func() {
 					var args []string
@@ -301,10 +313,7 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 					args = append([]string{"--force-window"}, args...)
 					_ = exec.Command("mpv", args...).Run()
 				}()
-				cmd = nil
 			}
-
-		case "t": // toggle all posts / text posts only
 
 		case "y": // copy current image url to clipboard
 			cmd = nil
@@ -321,14 +330,14 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 			in.Close()
 			_ = xclip.Wait()
 
+		case "t": // toggle all posts / text posts only
+
 		case "r": // reload
 			switch m.catalog {
 			case true:
 				m.thread.Posts = getCatalog(m.thread.Board).Posts
 			case false:
-				// oldLen := len(m.thread.Posts)
 				m.thread.Posts = getThread(m.thread.Board, m.thread.Posts[0].Num).Posts
-				// log.Println(oldLen, "->", len(m.thread.Posts))
 			}
 			m.matches = nil
 			m.input = ""
@@ -340,22 +349,25 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 			}
 			m.move(1)
 
+		case "ctrl+l": // redraw (like tty)
+
 		case " ":
 			// toggle img<>text
 			// TODO: in short mode, this field is currently
 			// irrelevant and thus does nothing
 			m.showComment = !m.showComment
 
+		// movement
+
 		case "j":
 			m.move(1)
 		case "k":
 			m.move(-1)
 
-		// TODO: if m.short, should be m.height/2
 		case "pgdown":
-			m.move(m.height / 4)
+			m.move(pgDist)
 		case "pgup":
-			m.move(-m.height / 4)
+			m.move(-pgDist)
 
 		case "g":
 			switch m.moveCount {
@@ -416,13 +428,15 @@ func (m *ThreadViewer) View() string {
 
 	curr := posts[m.cursor]
 
-	// log.Println("view cursor at", m.cursor)
-	// log.Println("model height", m.height, "/ posts", end-start)
-	// log.Println(m.cursor, curr.Subject, curr.Comment)
-
-	if m.short && m.height%2 == 1 {
-		start += 1 // include 1 less item (otherwise last item is oob)
+	// edge case: if odd height, include 1 less item (otherwise last item
+	// is oob)
+	if m.height%2 == 1 && m.cursor > scrolloff { // && m.short {
+		start += 1
 	}
+
+	// log.Println("view cursor at", m.cursor)
+	// log.Println("cursor", m.cursor, "/ model height", m.height, "/ posts", end-start)
+	// log.Println(m.cursor, curr.Subject, curr.Comment)
 
 	for _, p := range posts[start:end] {
 		if p == nil { // window indices may exceed that of Posts
@@ -438,9 +452,7 @@ func (m *ThreadViewer) View() string {
 		// TODO: imgCount
 		case m.catalog && p.Subject != "":
 			item = fmt.Sprintf("%s %s", selected, p.Subject)
-		case m.catalog && p.Subject == "":
-			item = fmt.Sprintf("%s %s", selected, p.lineComment())
-		case !m.catalog:
+		default:
 			item = fmt.Sprintf("%s %s", selected, p.lineComment())
 		}
 
@@ -466,7 +478,6 @@ func (m *ThreadViewer) View() string {
 	case false:
 		var body string
 		if m.showComment {
-			// body = curr.htmlComment()
 			body = curr.QuoteComment(&m.thread)
 		}
 
@@ -504,8 +515,9 @@ func (m *ThreadViewer) header(currId int) (header string) {
 		title = m.thread.Posts[0].Subject
 		newPosts := len(m.thread.Posts) - 1 - m.cursor
 		if m.refreshed && newPosts > 0 {
-			// title += " [!]"
-			// note: this is only valid if positioned at the last post
+			// note: this is only valid if positioned at the last
+			// post. for better accuracy, newPosts should be calc'd
+			// at refresh time (i.e. in the goro)
 			title += fmt.Sprintf(" [%d new posts]", newPosts)
 		}
 		header = fmt.Sprintf(
