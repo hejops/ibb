@@ -344,7 +344,7 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 
 		case "s": // save image (copy, rather)
 			post := m.currentPost()
-			if err := post.saveImage(post.Subject); err != nil {
+			if err := post.saveImage(m.thread.Posts[0].Subject); err != nil {
 				panic(err)
 			}
 			m.move(1)
