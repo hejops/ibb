@@ -216,13 +216,13 @@ func (m *ThreadViewer) Update(msg tea.Msg) (_ tea.Model, cmd tea.Cmd) {
 	// case tea.ClearScreenMsg: // no longer exported
 
 	case tea.WindowSizeMsg:
-		// log.Println(msg)
-		m.width = msg.Width
-		m.height = msg.Height
-		m.short = m.height < 50
-		m.showComment = m.short
+		if m.height != msg.Height {
+			m.width = msg.Width
+			m.height = msg.Height
+			m.short = m.height < 50
+		}
+		// m.showComment = m.short // don't do this (why not?)
 		return m, m.updateScreen()
-		// log.Println("showText:", m.showText)
 
 	case tea.KeyMsg:
 
