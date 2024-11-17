@@ -99,6 +99,10 @@ func (p Post) download() {
 		return
 	}
 
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+
 	log.Println("downloading", url)
 	resp, err := http.Get(url)
 	if err != nil {
