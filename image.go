@@ -24,8 +24,10 @@ type Size struct {
 	height int // in chars
 }
 
-// we assume 1 char is 15 px
-const PixPerChar = 15
+const (
+	CharHeightPx = 15
+	CharWidthPx  = 9
+)
 
 func decode(fname string) (img image.Image, ierr error) {
 	fo, err := os.Open(fname)
@@ -72,21 +74,23 @@ func Render(fname string, size *Size) {
 	imgX := img.Bounds().Max.X
 	imgY := img.Bounds().Max.Y
 
-	log.Println("img dims:", imgX, imgY)
-
 	if size != nil {
+
 		// https://en.wikipedia.org/wiki/Comparison_gallery_of_image_scaling_algorithms
 		interp := resize.Lanczos2 // Bilinear, Bicubic
 
-		// not sure why this works but ok
-		target := uint(float64(size.width*PixPerChar) / 4)
+		log.Println("img dims:", imgX, imgY)
 
-		switch imgY > imgX {
-		case true: // tall -- resize by width
-			img = resize.Resize(target, 0, img, interp)
-		case false: // wide -- resize by height
-			img = resize.Resize(0, target, img, interp)
-		}
+		// always resize by height, preserving aspect ratio
+		// note that size refers to the entire screen, so we /2 to
+		// account for upper pane. this should eventually be the
+		// responsibility of caller
+		img = resize.Resize(
+			0,
+			uint(CharHeightPx*55), // 55 is magic, apparently
+			img,
+			interp,
+		)
 
 		imgX = img.Bounds().Max.X
 		imgY = img.Bounds().Max.Y
@@ -99,8 +103,8 @@ func Render(fname string, size *Size) {
 
 		log.Println("resized dims:", imgX, imgY)
 
-		xPad := (size.width - (imgX / PixPerChar)) / 2
-		yPad := (size.height-(imgY/PixPerChar))/2 - 10
+		xPad := (size.width - (imgX / CharHeightPx)) / 2
+		yPad := (size.height - (imgY / CharWidthPx)) / 2
 		// log.Println("yPad", yPad)
 
 		fmt.Println(strings.Repeat("\n", max(0, yPad)))
