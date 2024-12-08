@@ -114,7 +114,7 @@ func (p Post) download() {
 	if err != nil {
 		panic(err)
 	}
-	// _ = os.Mkdir(tmpDir, os.ModePerm)
+	_ = os.Mkdir(tmpDir, os.ModePerm)
 
 	if err := os.WriteFile(path, b, 0666); err != nil {
 		panic(err)
