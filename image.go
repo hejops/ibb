@@ -95,12 +95,6 @@ func Render(fname string, size *Size) {
 		imgX = img.Bounds().Max.X
 		imgY = img.Bounds().Max.Y
 
-		if imgX > 1200 || imgY > 1200 {
-			// panic(fmt.Sprintln("too big:", imgX, imgY))
-			log.Println("too big:", imgX, imgY)
-			return
-		}
-
 		log.Println("resized dims:", imgX, imgY)
 
 		xPad := (size.width - (imgX / CharHeightPx)) / 2
